@@ -32,6 +32,7 @@
 #include <smpl/search/arastar.h>
 
 #include <algorithm>
+#include <assert.h>         // debug
 
 // system includes
 #include <sbpl/utils/key.h>
@@ -109,6 +110,7 @@ int ARAStar::replan(
     std::vector<int>* solution,
     int* cost)
 {
+    std::cout << "Replanning with ARA* " << std::endl;
     SMPL_DEBUG_NAMED(SLOG, "Find path to goal");
 
     if (m_start_state_id < 0) {
@@ -122,9 +124,15 @@ int ARAStar::replan(
 
     m_time_params = params;
 
+    std::cout << __LINE__ << std::endl;
     SearchState* start_state = getSearchState(m_start_state_id);
     SearchState* goal_state = getSearchState(m_goal_state_id);
+    std::cout << __LINE__ << std::endl;
 
+    assert(start_state != NULL);
+    assert(goal_state != NULL);
+
+    std::cout << __LINE__ << std::endl;    
     if (m_start_state_id != m_last_start_state_id) {
         SMPL_DEBUG_NAMED(SLOG, "Reinitialize search");
         m_open.clear();
@@ -152,61 +160,83 @@ int ARAStar::replan(
 
         m_last_start_state_id = m_start_state_id;
     }
+    std::cout << __LINE__ << std::endl;
 
-    if (m_goal_state_id != m_last_goal_state_id) {
+    std::cout << __LINE__ << std::endl;
+    if (m_goal_state_id != m_last_goal_state_id) 
+    {
         SMPL_DEBUG_NAMED(SLOG, "Refresh heuristics, keys, and reorder open list");
         recomputeHeuristics();
         reorderOpen();
 
         m_last_goal_state_id = m_goal_state_id;
     }
+    std::cout << __LINE__ << std::endl;
 
     auto start_time = clock::now();
     int num_expansions = 0;
     clock::duration elapsed_time = clock::duration::zero();
 
+    std::cout << __LINE__ << std::endl;
     int err;
-    while (m_satisfied_eps > m_final_eps) {
-        if (m_curr_eps == m_satisfied_eps) {
-            if (!m_time_params.improve) {
+    std::cout << m_satisfied_eps << " " << m_final_eps << std::endl;
+    while (m_satisfied_eps > m_final_eps) 
+    {
+        if (m_curr_eps == m_satisfied_eps) 
+        {
+            if (!m_time_params.improve) 
+            {
                 break;
             }
             // begin a new search iteration
             ++m_iteration;
             m_curr_eps -= m_delta_eps;
             m_curr_eps = std::max(m_curr_eps, m_final_eps);
-            for (SearchState* s : m_incons) {
+            for (SearchState* s : m_incons) 
+            {
                 s->incons = false;
                 m_open.push(s);
             }
+            std::cout << __LINE__ << std::endl;
             reorderOpen();
             m_incons.clear();
             SMPL_DEBUG_NAMED(SLOG, "Begin new search iteration %d with epsilon = %0.3f", m_iteration, m_curr_eps);
+            std::cout << __LINE__ << std::endl;
         }
+        std::cout << __LINE__ << std::endl;
         err = improvePath(start_time, goal_state, num_expansions, elapsed_time);
-        if (m_curr_eps == m_initial_eps) {
+        std::cout << __FILE__ << __LINE__ << " " << err <<  std::endl;
+        if (m_curr_eps == m_initial_eps) 
+        {
             m_expand_count_init += num_expansions;
             m_search_time_init += elapsed_time;
         }
-        if (err) {
+        if (err) 
+        {
             break;
         }
         SMPL_DEBUG_NAMED(SLOG, "Improved solution");
         m_satisfied_eps = m_curr_eps;
     }
+    std::cout << __LINE__ << std::endl;
 
     m_search_time += elapsed_time;
     m_expand_count += num_expansions;
 
-    if (m_satisfied_eps == std::numeric_limits<double>::infinity()) {
-        if (m_allow_partial_solutions && !m_open.empty()) {
+    std::cout << __LINE__ << std::endl;
+    if (m_satisfied_eps == std::numeric_limits<double>::infinity()) 
+    {
+        if (m_allow_partial_solutions && !m_open.empty()) 
+        {
             SearchState* next_state = m_open.min();
             extractPath(next_state, *solution, *cost);
             return !SUCCESS;
         }
         return !err;
     }
+    std::cout << __LINE__ << std::endl;
 
+    std::cout << __LINE__ << std::endl;
     extractPath(goal_state, *solution, *cost);
     return !SUCCESS;
 }
@@ -486,19 +516,24 @@ int ARAStar::improvePath(
     int& elapsed_expansions,
     clock::duration& elapsed_time)
 {
-    while (!m_open.empty()) {
+    while (!m_open.empty()) 
+    {
         SearchState* min_state = m_open.min();
+        assert(min_state != NULL);
 
         auto now = clock::now();
         elapsed_time = now - start_time;
 
         // path to goal found
-        if (min_state->f >= goal_state->f || min_state == goal_state) {
+        if (min_state->f >= goal_state->f || min_state == goal_state) 
+        {
+            std::cout << __FILE__ << __LINE__ << std::endl;
             SMPL_DEBUG_NAMED(SLOG, "Found path to goal");
             return SUCCESS;
         }
 
-        if (timedOut(elapsed_expansions, elapsed_time)) {
+        if (timedOut(elapsed_expansions, elapsed_time)) 
+        {
             SMPL_DEBUG_NAMED(SLOG, "Ran out of time");
             return TIMED_OUT;
         }
@@ -513,7 +548,9 @@ int ARAStar::improvePath(
         min_state->iteration_closed = m_iteration;
         min_state->eg = min_state->g;
 
+        std::cout << __LINE__ << std::endl;
         expand(min_state);
+        std::cout << __LINE__ << std::endl;
 
         ++elapsed_expansions;
     }
@@ -527,34 +564,50 @@ void ARAStar::expand(SearchState* s)
 {
     m_succs.clear();
     m_costs.clear();
+    std::cout << __LINE__ << std::endl;
     m_space->GetSuccs(s->state_id, &m_succs, &m_costs);
+    std::cout << __LINE__ << std::endl;
 
-    SMPL_DEBUG_NAMED(SELOG, "  %zu successors", m_succs.size());
+    std::cout << "successors: " << m_succs.size() << std::endl;;
 
-    for (size_t sidx = 0; sidx < m_succs.size(); ++sidx) {
+    std::cout << __LINE__ << std::endl;
+    for (size_t sidx = 0; sidx < m_succs.size(); ++sidx) 
+    {
         int succ_state_id = m_succs[sidx];
         int cost = m_costs[sidx];
 
+        std::cout << __LINE__ << std::endl;
         SearchState* succ_state = getSearchState(succ_state_id);
         reinitSearchState(succ_state);
+        std::cout << __LINE__ << std::endl;
 
         int new_cost = s->eg + cost;
         SMPL_DEBUG_NAMED(SELOG, "Compare new cost %d vs old cost %d", new_cost, succ_state->g);
-        if (new_cost < succ_state->g) {
+        if (new_cost < succ_state->g) 
+        {
             succ_state->g = new_cost;
             succ_state->bp = s;
-            if (succ_state->iteration_closed != m_iteration) {
+            if (succ_state->iteration_closed != m_iteration) 
+            {
+                std::cout << __LINE__ << std::endl;
                 succ_state->f = computeKey(succ_state);
-                if (m_open.contains(succ_state)) {
+                std::cout << __LINE__ << std::endl;
+                if (m_open.contains(succ_state)) 
+                {
                     m_open.decrease(succ_state);
-                } else {
+                } 
+                else 
+                {
                     m_open.push(succ_state);
                 }
-            } else if (!succ_state->incons) {
+            } 
+            else if (!succ_state->incons) 
+            {
                 m_incons.push_back(succ_state);
             }
         }
     }
+    std::cout << __LINE__ << std::endl;
 }
 
 // Recompute the f-values of all states in OPEN and reorder OPEN.

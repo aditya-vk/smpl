@@ -1,4 +1,5 @@
 #include <smpl_ompl_interface/ompl_interface.h>
+#include <assert.h>
 
 // system includes
 #include <ompl/base/Planner.h>
@@ -133,9 +134,14 @@ bool RobotModel::checkJointLimits(const smpl::RobotState& state, bool verbose)
 
 auto RobotModel::computeFK(const smpl::RobotState& state) -> Eigen::Affine3d
 {
-    auto s = MakeStateOMPL(this->si->getStateSpace(), state);
+    std::cout << __FILE__ << __LINE__ << std::endl;
+    auto s = MakeStateOMPL((this->si->getStateSpace()).get(), state);
+    assert(s);
+    std::cout << __FILE__ << __LINE__ << std::endl;
     ompl::base::EuclideanProjection projected;
-    this->projection->project(s.get(), projected);
+    std::cout << __FILE__ << __LINE__ << std::endl;
+    this->projection->project(s, projected);
+    std::cout << __LINE__ << std::endl;
     return Eigen::Translation3d(projected[0], projected[1], projected[2]) *
             Eigen::AngleAxisd(projected[3], Eigen::Vector3d::UnitZ()) *
             Eigen::AngleAxisd(projected[4], Eigen::Vector3d::UnitY()) *
@@ -144,7 +150,10 @@ auto RobotModel::computeFK(const smpl::RobotState& state) -> Eigen::Affine3d
 
 auto RobotModel::getExtension(size_t class_code) -> smpl::Extension*
 {
-    if (class_code == smpl::GetClassCode<smpl::RobotModel>()) {
+    return this;
+    if (class_code == smpl::GetClassCode<smpl::RobotModel>()) 
+    {
+        std::cout << __FILE__ << __LINE__ << std::endl;
         return this;
     }
 
@@ -152,9 +161,11 @@ auto RobotModel::getExtension(size_t class_code) -> smpl::Extension*
         this->projection != NULL &&
         this->projection->getDimension() == 6)
     {
+        std::cout << __FILE__ << __LINE__ << std::endl;
         return this;
     }
 
+    std::cout << __FILE__ << __LINE__ << std::endl;
     return NULL;
 }
 
@@ -430,19 +441,37 @@ PlannerImpl::PlannerImpl(
     this->model.si = si;
 
     {
+        std::cout << "DIMENSION: " << si->getStateSpace()->getDimension() << std::endl;
         std::vector<std::string> names;
         std::vector<RobotModel::VariableProperties> props;
-        if (!MakeVariableProperties(si->getStateSpace().get(), names, props)) {
-            SMPL_WARN("Failed to construct Planner!");
-            return;
+        for (std::size_t i = 0; i < si->getStateSpace()->getDimension(); ++i)
+        {
+            std::string name = "real" + std::to_string(i);
+            std::cout << "Naming " << name << std::endl;
+            names.emplace_back(name);
+
+            RobotModel::VariableProperties prop;
+            prop.min_position = -3.2;
+            prop.max_position = 3.2;
+            prop.flags |= RobotModel::VariableProperties::BOUNDED;
+            prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
+            prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
+
+            props.push_back(prop);
         }
+
+        // if (!MakeVariableProperties(si->getStateSpace().get(), names, props)) {
+        //     SMPL_WARN("Failed to construct Planner!");
+        //     return;
+        // }
 
         SMPL_DEBUG_STREAM("variable names = " << names);
 
         model.setPlanningJoints(names);
         model.variables = std::move(props);
 
-        if (si->getStateSpace()->hasProjection("fk")) {
+        if (si->getStateSpace()->hasProjection("fk")) 
+        {
             auto proj = si->getStateSpace()->getProjection("fk");
             model.projection = proj.get();
         }
@@ -749,15 +778,26 @@ auto PlannerImpl::solve(
             return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_START);
         }
 
+        std::cout << "PDEF has start state " << pdef->getStartStateCount() << std::endl;
         auto* start = pdef->getStartState(0);
-        auto start_state = MakeStateSMPL(ompl_space, start);
+        // auto start_state = MakeStateSMPL(ompl_space, start);
+
+        // DEBUG
+        std::vector<double> start_state{0, -1.5708, 1.5708, 1.5708, 3.14159, 0, 0, 0};
+
         SMPL_DEBUG_STREAM("start state = " << start_state);
-        if (!this->space.setStart(start_state)) {
+        std::cout << "start state = " << start_state << std::endl;
+        std::cout << __LINE__ << std::endl;
+        if (!this->space.setStart(start_state)) 
+        {
             SMPL_WARN("Failed to set start state");
             return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_START);
         }
+        std::cout << __LINE__ << std::endl;
 
+        std::cout << __LINE__ << std::endl;
         this->heuristic->updateStart(start_state);
+        std::cout << __LINE__ << std::endl;
     }
 
     ////////////////////////
@@ -776,7 +816,7 @@ auto PlannerImpl::solve(
         //                  GoalLazySamples
 
         auto& abstract_goal = pdef->getGoal();
-        SMPL_DEBUG("Received goal of type %s", to_cstring(abstract_goal->getType()));
+        SMPL_WARN("Received goal of type %s", to_cstring(abstract_goal->getType()));
 
         switch (abstract_goal->getType()) {
         case ompl::base::GoalType::GOAL_ANY:
@@ -792,6 +832,7 @@ auto PlannerImpl::solve(
                 goal_condition.rpy_tolerance[0] = pose_goal->orientation_tolerance[0];
                 goal_condition.rpy_tolerance[1] = pose_goal->orientation_tolerance[1];
                 goal_condition.rpy_tolerance[2] = pose_goal->orientation_tolerance[2];
+                std::cout << __LINE__ << std::endl;
                 break;
             }
         }
@@ -829,13 +870,15 @@ auto PlannerImpl::solve(
             return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_GOAL);
         }
 
+        std::cout << __LINE__ << std::endl;
         this->heuristic->updateGoal(goal_condition);
+        std::cout << __LINE__ << std::endl;
     }
 
     auto* bfs_heuristic = dynamic_cast<BfsHeuristic*>(this->heuristic.get());
     if (bfs_heuristic != NULL) {
-        SV_SHOW_DEBUG_NAMED("bfs_walls", bfs_heuristic->getWallsVisualization());
-        SV_SHOW_DEBUG_NAMED("bfs_values", bfs_heuristic->getValuesVisualization());
+        // SV_SHOW_DEBUG_NAMED("bfs_walls", bfs_heuristic->getWallsVisualization());
+        // SV_SHOW_DEBUG_NAMED("bfs_values", bfs_heuristic->getValuesVisualization());
     }
 
     //////////////////
@@ -844,7 +887,10 @@ auto PlannerImpl::solve(
 
     // TODO: hmmm, is this needed? this should probably be part of clear()
     // and allow the state of the search to persist between calls
+    std::cout << __LINE__ << std::endl;
     this->search->force_planning_from_scratch();
+    std::cout << __LINE__ << std::endl;
+
 
     smpl::ARAStar::TimeParameters time_params;
     time_params.bounded = this->search->boundExpansions();
@@ -852,16 +898,23 @@ auto PlannerImpl::solve(
     time_params.type = smpl::ARAStar::TimeParameters::USER;
     time_params.timed_out_fun = [&]() { return ptc.eval(); };
 
+    std::cout << __LINE__ << std::endl;
+
     auto start_id = space.getStartStateID();
     auto goal_id = space.getGoalStateID();
     this->search->set_start(start_id);
     this->search->set_goal(goal_id);
 
+    std::cout << __LINE__ << std::endl;
+
     std::vector<int> solution;
     int cost;
     auto res = this->search->replan(time_params, &solution, &cost);
 
-    if (!res) {
+    std::cout << __LINE__ << std::endl;
+
+    if (!res) 
+    {
         SMPL_WARN("Failed to find solution");
         return ompl::base::PlannerStatus(ompl::base::PlannerStatus::TIMEOUT);
     }
@@ -1050,8 +1103,11 @@ auto MakeStateOMPL(
     const smpl::RobotState& state)
     -> ompl::base::State*
 {
+    std::cout << __LINE__ << __FILE__ << std::endl;
     auto* s = space->allocState();
+    std::cout << __LINE__ << __FILE__ << std::endl;
     space->copyFromReals(s, state);
+    std::cout << __LINE__ << __FILE__ << std::endl;
     return s;
 }
 
@@ -1060,8 +1116,20 @@ auto MakeStateOMPL(
     const smpl::RobotState& state)
     -> ompl::base::ScopedState<>
 {
+    assert(state != NULL);
+    std::cout << __LINE__ << __FILE__ << std::endl;
     auto s = ompl::base::ScopedState<>(space);
-    space->copyFromReals(s.get(), state);
+    std::cout << __LINE__ << __FILE__ << std::endl;
+    if (space)
+    {
+        std::cout << __LINE__ << __FILE__ << std::endl;
+        space->copyFromReals(s.get(), state);
+    }
+    else
+    {
+        std::cout << __LINE__ << __FILE__ << std::endl;
+    }
+    std::cout << __LINE__ << __FILE__ << std::endl;
     return std::move(s);
 }
 

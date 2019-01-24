@@ -305,9 +305,10 @@ void ManipLatticeActionSpace::ampThresh(
 auto ManipLatticeActionSpace::getStartGoalDistances(const RobotState& state)
     -> std::pair<double, double>
 {
-    if (!m_fk_iface) {
+    // if (!m_fk_iface) 
+    // {
         return std::make_pair(0.0, 0.0);
-    }
+    // }
 
     auto pose = m_fk_iface->computeFK(state);
 
@@ -331,14 +332,17 @@ bool ManipLatticeActionSpace::apply(
     const RobotState& parent,
     std::vector<Action>& actions)
 {
+    std::cout << __FILE__ << __LINE__ << std::endl;
     double goal_dist, start_dist;
     std::tie(start_dist, goal_dist) = getStartGoalDistances(parent);
 
-    for (auto& prim : m_mprims) {
+    for (auto& prim : m_mprims) 
+    {
         (void)getAction(parent, goal_dist, start_dist, prim, actions);
     }
 
-    if (actions.empty()) {
+    if (actions.empty()) 
+    {
         SMPL_WARN_ONCE("No motion primitives specified");
     }
 

@@ -199,6 +199,7 @@ void ManipLattice::GetSuccs(
     std::vector<int>* succs,
     std::vector<int>* costs)
 {
+    std::cout << __LINE__ << std::endl;
     assert(state_id >= 0 && state_id < m_states.size() && "state id out of bounds");
     assert(succs && costs && "successor buffer is null");
     assert(m_actions && "action space is uninitialized");
@@ -206,7 +207,8 @@ void ManipLattice::GetSuccs(
     SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "expanding state %d", state_id);
 
     // goal state should be absorbing
-    if (state_id == m_goal_state_id) {
+    if (state_id == m_goal_state_id) 
+    {
         return;
     }
 
@@ -220,12 +222,13 @@ void ManipLattice::GetSuccs(
     SMPL_DEBUG_STREAM_NAMED(G_EXPANSIONS_LOG, "  angles: " << parent_entry->state);
 
     auto* vis_name = "expansion";
-    SV_SHOW_DEBUG_NAMED(vis_name, getStateVisualization(parent_entry->state, vis_name));
+    // SV_SHOW_DEBUG_NAMED(vis_name, getStateVisualization(parent_entry->state, vis_name));
 
     int goal_succ_count = 0;
 
     std::vector<Action> actions;
-    if (!m_actions->apply(parent_entry->state, actions)) {
+    if (!m_actions->apply(parent_entry->state, actions)) 
+    {
         SMPL_WARN("Failed to get actions");
         return;
     }
@@ -233,40 +236,53 @@ void ManipLattice::GetSuccs(
     SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "  actions: %zu", actions.size());
 
     // check actions for validity
+    std::cout << __LINE__ << std::endl;
     RobotCoord succ_coord(robot()->jointVariableCount(), 0);
-    for (size_t i = 0; i < actions.size(); ++i) {
+    for (size_t i = 0; i < actions.size(); ++i) 
+    {
         auto& action = actions[i];
 
         SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "    action %zu:", i);
         SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "      waypoints: %zu", action.size());
 
-        if (!checkAction(parent_entry->state, action)) {
+        std::cout << __LINE__ << std::endl;
+        if (!checkAction(parent_entry->state, action)) 
+        {
             continue;
         }
+        std::cout << __LINE__ << std::endl;
 
         // compute destination coords
         stateToCoord(action.back(), succ_coord);
-
+        std::cout << __LINE__ << std::endl;
         // get the successor
 
         // check if hash entry already exists, if not then create one
         int succ_state_id = getOrCreateState(succ_coord, action.back());
+        std::cout << __LINE__ << std::endl;
         ManipLatticeState* succ_entry = getHashEntry(succ_state_id);
+        std::cout << __LINE__ << std::endl;
 
         // check if this state meets the goal criteria
         auto is_goal_succ = isGoal(action.back());
-        if (is_goal_succ) {
+        std::cout << __LINE__ << std::endl;
+        if (is_goal_succ) 
+        {
             // update goal state
             ++goal_succ_count;
         }
 
         // put successor on successor list with the proper cost
-        if (is_goal_succ) {
+        if (is_goal_succ) 
+        {
             succs->push_back(m_goal_state_id);
-        } else {
+        } 
+        else 
+        {
             succs->push_back(succ_state_id);
         }
         costs->push_back(cost(parent_entry, succ_entry, is_goal_succ));
+        std::cout << __LINE__ << std::endl;
 
         // log successor details
         SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "      succ: %zu", i);
@@ -275,8 +291,9 @@ void ManipLattice::GetSuccs(
         SMPL_DEBUG_STREAM_NAMED(G_EXPANSIONS_LOG, "        state: " << succ_entry->state);
         SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "        cost: %5d", cost(parent_entry, succ_entry, is_goal_succ));
     }
-
-    if (goal_succ_count > 0) {
+std::cout << __LINE__ << std::endl;
+    if (goal_succ_count > 0) 
+    {
         SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "Got %d goal successors!", goal_succ_count);
     }
 }
@@ -582,6 +599,7 @@ auto ManipLattice::computePlanningFrameFK(const RobotState& state) const
 {
     assert(state.size() == robot()->jointVariableCount());
     assert(m_fk_iface);
+    std::cout << __LINE__ << std::endl;
 
     return m_fk_iface->computeFK(state);
 }
@@ -600,12 +618,14 @@ bool ManipLattice::checkAction(const RobotState& state, const Action& action)
     std::uint32_t violation_mask = 0x00000000;
 
     // check intermediate states for collisions
-    for (size_t iidx = 0; iidx < action.size(); ++iidx) {
+    for (size_t iidx = 0; iidx < action.size(); ++iidx) 
+    {
         const RobotState& istate = action[iidx];
         SMPL_DEBUG_STREAM_NAMED(G_EXPANSIONS_LOG, "        " << iidx << ": " << istate);
 
         // check joint limits
-        if (!robot()->checkJointLimits(istate)) {
+        if (!robot()->checkJointLimits(istate)) 
+        {
             SMPL_DEBUG_NAMED(G_EXPANSIONS_LOG, "        -> violates joint limits");
             violation_mask |= 0x00000001;
             break;
@@ -630,6 +650,8 @@ bool ManipLattice::checkAction(const RobotState& state, const Action& action)
     if (violation_mask) {
         return false;
     }
+
+    return true;
 
     // check for collisions along path from parent to first waypoint
     if (!collisionChecker()->isStateToStateValid(state, action[0])) {
@@ -708,10 +730,13 @@ auto WithinTolerance(
 
 bool ManipLattice::isGoal(const RobotState& state)
 {
-    switch (goal().type) {
+    switch (goal().type) 
+    {
     case GoalType::JOINT_STATE_GOAL:
     {
-        for (int i = 0; i < goal().angles.size(); i++) {
+        std::cout << __LINE__ << std::endl;
+        for (int i = 0; i < goal().angles.size(); i++) 
+        {
             if (fabs(state[i] - goal().angles[i]) > goal().angle_tolerances[i]) {
                 return false;
             }
@@ -720,24 +745,29 @@ bool ManipLattice::isGoal(const RobotState& state)
     }
     case GoalType::XYZ_RPY_GOAL:
     {
+        std::cout << __LINE__ << std::endl;
         // get pose of planning link
-        auto pose = computePlanningFrameFK(state);
+        // auto pose = computePlanningFrameFK(state);
+        std::cout << __LINE__ << std::endl;
 
-        auto near = WithinTolerance(
-                pose,
-                goal().pose,
-                goal().xyz_tolerance,
-                goal().rpy_tolerance);
-        return near.first & near.second;
+        // auto near = WithinTolerance(
+        //         pose,
+        //         goal().pose,
+        //         goal().xyz_tolerance,
+        //         goal().rpy_tolerance);
+        // return near.first & near.second;
+        return true & true;
     }
     case GoalType::MULTIPLE_POSE_GOAL:
     {
         auto pose = computePlanningFrameFK(state);
-        for (auto& goal_pose : goal().poses) {
+        for (auto& goal_pose : goal().poses) 
+        {
             auto near = WithinTolerance(
                     pose, goal_pose,
                     goal().xyz_tolerance, goal().rpy_tolerance);
-            if (near.first & near.second) {
+            if (near.first & near.second) 
+            {
                 return true;
             }
         }
@@ -745,11 +775,13 @@ bool ManipLattice::isGoal(const RobotState& state)
     }
     case GoalType::XYZ_GOAL:
     {
+        std::cout << __LINE__ << std::endl;
         auto pose = computePlanningFrameFK(state);
         return WithinPositionTolerance(pose, goal().pose, goal().xyz_tolerance);
     }
     case GoalType::USER_GOAL_CONSTRAINT_FN:
     {
+        std::cout << __LINE__ << std::endl;
         return goal().check_goal(goal().check_goal_user, state);
     }
     default:
@@ -791,16 +823,18 @@ bool ManipLattice::setStart(const RobotState& state)
         return false;
     }
 
+    std::cout << __LINE__ << std::endl;
     // check if the start configuration is in collision
-    if (!collisionChecker()->isStateValid(state, true)) {
-        auto* vis_name = "invalid_start";
-        SV_SHOW_WARN_NAMED(vis_name, collisionChecker()->getCollisionModelVisualization(state));
-        SMPL_WARN(" -> in collision");
-        return false;
-    }
+    // if (!collisionChecker()->isStateValid(state, true)) {
+    //     auto* vis_name = "invalid_start";
+    //     SV_SHOW_WARN_NAMED(vis_name, collisionChecker()->getCollisionModelVisualization(state));
+    //     SMPL_WARN(" -> in collision");
+    //     return false;
+    // }
+    std::cout << __LINE__ << std::endl;
 
-    auto* vis_name = "start_config";
-    SV_SHOW_INFO_NAMED(vis_name, getStateVisualization(state, vis_name));
+    // auto* vis_name = "start_config";
+    // SV_SHOW_INFO_NAMED(vis_name, getStateVisualization(state, vis_name));
 
     // get arm position in environment
     auto start_coord = RobotCoord(robot()->jointVariableCount());
