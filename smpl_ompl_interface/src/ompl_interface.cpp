@@ -1,6 +1,7 @@
 #include <smpl_ompl_interface/ompl_interface.h>
 
 // system includes
+#include <iostream>
 #include <ompl/base/Planner.h>
 #include <ompl/base/goals/GoalLazySamples.h>
 #include <ompl/base/goals/GoalRegion.h>
@@ -428,24 +429,35 @@ PlannerImpl::PlannerImpl(
     ///////////////////////////
 
     this->model.si = si;
+    
+    std::vector<std::string> names;
+    std::vector<RobotModel::VariableProperties> props;
 
+    for (std::size_t i = 0; i < si->getStateSpace()->getDimension(); ++i)
     {
-        std::vector<std::string> names;
-        std::vector<RobotModel::VariableProperties> props;
-        if (!MakeVariableProperties(si->getStateSpace().get(), names, props)) {
-            SMPL_WARN("Failed to construct Planner!");
-            return;
-        }
+      std::string name = "real" + std::to_string(i);
+      names.emplace_back(name);
 
-        SMPL_DEBUG_STREAM("variable names = " << names);
+      RobotModel::VariableProperties prop;
+      prop.min_position = -5.0;
+      prop.max_position = 5.0;
+      prop.flags |= RobotModel::VariableProperties::BOUNDED;
+      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
+      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
 
-        model.setPlanningJoints(names);
-        model.variables = std::move(props);
+      props.push_back(prop);
+    }
 
-        if (si->getStateSpace()->hasProjection("fk")) {
-            auto proj = si->getStateSpace()->getProjection("fk");
-            model.projection = proj.get();
-        }
+    model.setPlanningJoints(names);
+    model.variables = std::move(props);
+
+    if (si->getStateSpace()->hasProjection("fk")) 
+    {
+      auto proj = si->getStateSpace()->getProjection("fk");
+      model.projection = proj.get();
+
+      if (model.projection == NULL)
+        throw std::invalid_argument("Cannot run without FK evaluator.");
     }
 
     ////////////////////////////////////////////
