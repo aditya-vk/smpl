@@ -23,67 +23,64 @@ struct PlannerImpl;
 
 struct PoseGoal : public ompl::base::Goal
 {
-    Eigen::Affine3d pose;
-    Eigen::Vector3d position_tolerance;
-    Eigen::Vector3d orientation_tolerance;
+  Eigen::Affine3d pose;
+  Eigen::Vector3d position_tolerance;
+  Eigen::Vector3d orientation_tolerance;
 
-    PoseGoal(
-        const ompl::base::SpaceInformationPtr& si,
-        const Eigen::Affine3d& pose = Eigen::Affine3d::Identity());
+  PoseGoal(
+      const ompl::base::SpaceInformationPtr& si,
+      const Eigen::Affine3d& pose = Eigen::Affine3d::Identity());
 
-    bool isSatisfied(const ompl::base::State* state) const override;
+  bool isSatisfied(const ompl::base::State* state) const override;
 };
 
 struct OMPLPlanner : public ompl::base::Planner
 {
-    std::unique_ptr<detail::PlannerImpl> m_impl;
+  std::unique_ptr<detail::PlannerImpl> m_impl;
 
-    /// \param planner_id
-    OMPLPlanner(
-        const ompl::base::SpaceInformationPtr& si,
-        const std::string& planner_id = std::string(),
-        OccupancyGrid* grid = NULL);
+  /// \param planner_id
+  OMPLPlanner(
+      const ompl::base::SpaceInformationPtr& si,
+      const std::string& planner_id = std::string(),
+      OccupancyGrid* grid = NULL);
 
-    ~OMPLPlanner();
+  ~OMPLPlanner();
 
-    using VisualizerFun = std::function<
-            std::vector<smpl::visual::Marker>(const std::vector<double>& state)>;
-    void setStateVisualizer(const VisualizerFun& fun);
+  using VisualizerFun = std::function<std::vector<smpl::visual::Marker>(
+      const std::vector<double>& state)>;
+  void setStateVisualizer(const VisualizerFun& fun);
 
-    void setOccupancyGrid(OccupancyGrid* grid);
+  void setOccupancyGrid(OccupancyGrid* grid);
 
-    void setProblemDefinition(const ompl::base::ProblemDefinitionPtr& pdef) override;
+  void setProblemDefinition(
+      const ompl::base::ProblemDefinitionPtr& pdef) override;
 
-    auto solve(const ompl::base::PlannerTerminationCondition& ptc)
-        -> ompl::base::PlannerStatus override;
+  auto solve(const ompl::base::PlannerTerminationCondition& ptc)
+      -> ompl::base::PlannerStatus override;
 
-    void clear() override;
+  void clear() override;
 
-    void checkValidity() override;
+  void checkValidity() override;
 
-    void setup() override;
+  void setup() override;
 
-    void getPlannerData(ompl::base::PlannerData& data) const override;
+  void getPlannerData(ompl::base::PlannerData& data) const override;
 
-    friend struct detail::PlannerImpl;
+  friend struct detail::PlannerImpl;
 };
 
 auto MakeStateSMPL(
-    const ompl::base::StateSpace* space,
-    const ompl::base::State* state)
+    const ompl::base::StateSpace* space, const ompl::base::State* state)
     -> std::vector<double>;
 
 auto MakeStateOMPL(
-    const ompl::base::StateSpace* space,
-    const std::vector<double>& state)
+    const ompl::base::StateSpace* space, const std::vector<double>& state)
     -> ompl::base::State*;
 
 auto MakeStateOMPL(
-    const ompl::base::StateSpacePtr& space,
-    const std::vector<double>& state)
+    const ompl::base::StateSpacePtr& space, const std::vector<double>& state)
     -> ompl::base::ScopedState<>;
 
 } // namespace smpl
 
 #endif
-
