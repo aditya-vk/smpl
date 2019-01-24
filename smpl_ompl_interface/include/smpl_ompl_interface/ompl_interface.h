@@ -21,6 +21,7 @@ namespace detail {
 struct PlannerImpl;
 } // namespace detail
 
+
 struct PoseGoal : public ompl::base::Goal
 {
   Eigen::Affine3d pose;
@@ -34,8 +35,9 @@ struct PoseGoal : public ompl::base::Goal
   bool isSatisfied(const ompl::base::State* state) const override;
 };
 
-struct OMPLPlanner : public ompl::base::Planner
+class OMPLPlanner : public ompl::base::Planner
 {
+public:
   std::unique_ptr<detail::PlannerImpl> m_impl;
 
   /// \param planner_id
@@ -66,7 +68,11 @@ struct OMPLPlanner : public ompl::base::Planner
 
   void getPlannerData(ompl::base::PlannerData& data) const override;
 
-  friend struct detail::PlannerImpl;
+  void makeVariableProperties();
+
+  void setPositionLimits(Eigen::VectorXd positionLowerLimits, Eigen::VectorXd positionUpperLimits);
+
+  friend class detail::PlannerImpl;
 };
 
 auto MakeStateSMPL(

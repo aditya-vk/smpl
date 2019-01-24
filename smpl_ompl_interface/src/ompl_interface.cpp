@@ -29,6 +29,8 @@
 #include <smpl/search/arastar.h>
 #include <smpl/stl/memory.h>
 
+#include <iostream>
+
 namespace smpl {
 namespace detail {
 
@@ -254,9 +256,11 @@ enum struct ConcreteSpaceType
   MORSE_STATE_SPACE_TYPE,
 };
 
-struct PlannerImpl
+class PlannerImpl
 {
+public:
   // world model interface
+  std::size_t mDimension;
   RobotModel model;
   CollisionChecker checker;
 
@@ -270,6 +274,12 @@ struct PlannerImpl
 
   // search
   std::unique_ptr<smpl::ARAStar> search;
+
+  // Position Lower Limits
+  Eigen::VectorXd mPositionLowerLimits;
+
+  // Position Upper Limits
+  Eigen::VectorXd mPositionUpperLimits;
 
   OccupancyGrid* grid = NULL;
 
@@ -296,111 +306,13 @@ struct PlannerImpl
 
   void getPlannerData(
       const OMPLPlanner* planner, ompl::base::PlannerData& data) const;
+
+  /// Set Position Limits needed to construct the manipulation lattice.
+  void setPositionLimits(Eigen::VectorXd positionLowerLimits, Eigen::VectorXd positionUpperLimits);
+
+  /// Supports only R1 and SO2 joint robots.
+  void makeVariableProperties();
 };
-
-static bool MakeVariableProperties(
-    const ompl::base::StateSpace* space,
-    std::vector<std::string>& names,
-    std::vector<RobotModel::VariableProperties>& props)
-{
-  const ompl::base::CompoundStateSpace* compound_space;
-  const ompl::base::DiscreteStateSpace* discrete_space;
-  const ompl::base::RealVectorStateSpace* real_space;
-  const ompl::base::SO2StateSpace* so2_space;
-  const ompl::base::SO3StateSpace* so3_space;
-  const ompl::base::TimeStateSpace* time_space;
-  if ((compound_space
-       = dynamic_cast<const ompl::base::CompoundStateSpace*>(space))
-      != NULL)
-  {
-    for (auto& ss : compound_space->getSubspaces())
-    {
-      if (!MakeVariableProperties(ss.get(), names, props))
-      {
-        return false;
-      }
-    }
-  }
-  else if (
-      (discrete_space
-       = dynamic_cast<const ompl::base::DiscreteStateSpace*>(space))
-      != NULL)
-  {
-    RobotModel::VariableProperties prop;
-    prop.min_position = discrete_space->getLowerBound();
-    prop.max_position = discrete_space->getUpperBound();
-    prop.flags |= RobotModel::VariableProperties::BOUNDED;
-
-    prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
-    prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
-
-    names.push_back("discrete");
-    props.push_back(prop);
-  }
-  else if (
-      (real_space
-       = dynamic_cast<const ompl::base::RealVectorStateSpace*>(space))
-      != NULL)
-  {
-    for (auto i = 0; i < real_space->getDimension(); ++i)
-    {
-      RobotModel::VariableProperties prop;
-      prop.min_position = real_space->getBounds().low[i];
-      prop.max_position = real_space->getBounds().high[i];
-      prop.flags |= RobotModel::VariableProperties::BOUNDED;
-      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
-      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
-
-      if (real_space->getDimensionName(i).empty())
-      {
-        names.push_back("real" + std::to_string(i));
-      }
-      else
-      {
-        names.push_back(real_space->getDimensionName(i));
-      }
-      props.push_back(prop);
-    }
-  }
-  else if (
-      (so2_space = dynamic_cast<const ompl::base::SO2StateSpace*>(space))
-      != NULL)
-  {
-    RobotModel::VariableProperties prop;
-    prop.min_position = -std::numeric_limits<double>::infinity();
-    prop.max_position = std::numeric_limits<double>::infinity();
-    prop.flags |= RobotModel::VariableProperties::CONTINUOUS;
-    prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
-    prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
-    names.push_back("so2");
-    props.push_back(prop);
-  }
-  else if (
-      (so3_space = dynamic_cast<const ompl::base::SO3StateSpace*>(space))
-      != NULL)
-  {
-    RobotModel::VariableProperties prop;
-    prop.min_position = -std::numeric_limits<double>::infinity();
-    prop.max_position = std::numeric_limits<double>::infinity();
-    prop.flags |= RobotModel::VariableProperties::CONTINUOUS;
-    prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
-    prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
-    names.push_back("so3_r");
-    props.push_back(prop);
-
-    names.push_back("so3_p");
-    props.push_back(prop);
-
-    names.push_back("so3_y");
-    props.push_back(prop);
-  }
-  else
-  {
-    return false; // unsupported state space type
-  }
-
-  return true;
-}
 
 PlannerImpl::PlannerImpl(
     OMPLPlanner* planner,
@@ -430,6 +342,8 @@ PlannerImpl::PlannerImpl(
 
   std::map<std::string, std::string> params;
   si->getStateSpace()->params().getParams(params);
+
+  mDimension = si->getStateSpace()->getDimension();
 
   si->getStateSpace()->computeLocations();
   auto& locations = si->getStateSpace()->getValueLocations();
@@ -469,26 +383,8 @@ PlannerImpl::PlannerImpl(
 
   this->model.si = si;
 
-  {
-    std::vector<std::string> names;
-    std::vector<RobotModel::VariableProperties> props;
-    if (!MakeVariableProperties(si->getStateSpace().get(), names, props))
-    {
-      SMPL_WARN("Failed to construct Planner!");
-      return;
-    }
-
-    SMPL_DEBUG_STREAM("variable names = " << names);
-
-    model.setPlanningJoints(names);
-    model.variables = std::move(props);
-
-    if (si->getStateSpace()->hasProjection("fk"))
-    {
-      auto proj = si->getStateSpace()->getProjection("fk");
-      model.projection = proj.get();
-    }
-  }
+  // Sets the 
+  makeVariableProperties();
 
   ////////////////////////////////////////////
   // Initialize Collision Checker Interface //
@@ -1061,6 +957,71 @@ void PlannerImpl::getPlannerData(
   planner->ompl::base::Planner::getPlannerData(data);
 }
 
+void PlannerImpl::setPositionLimits(Eigen::VectorXd positionLowerLimits, 
+  Eigen::VectorXd positionUpperLimits)
+{
+  // Check if both limits have the same dimension.
+  if (positionUpperLimits.size() != positionLowerLimits.size())
+  {
+    throw std::invalid_argument("[ompl_interface] state dimension should match limits");
+  }
+
+  // Check if the dimensions match with statespace.
+  if (positionUpperLimits.size() != mDimension)
+  {
+    throw std::invalid_argument("[ompl_interface] state dimension should match limits");
+  }
+
+  mPositionLowerLimits = positionLowerLimits;
+  mPositionLowerLimits = positionUpperLimits;
+}
+
+void PlannerImpl::makeVariableProperties()
+{
+  std::vector<std::string> names;
+  std::vector<RobotModel::VariableProperties> properties;
+
+  for (int i = 0; i < mPositionUpperLimits.size(); ++i)
+  {
+    if (mPositionLowerLimits(i) == std::numeric_limits<double>::min()
+      || mPositionUpperLimits(i) == std::numeric_limits<double>::max())
+    {
+      names.emplace_back("so2" + std::to_string(i));
+
+      RobotModel::VariableProperties prop;
+      prop.min_position = mPositionLowerLimits(i);
+      prop.max_position = mPositionUpperLimits(i);
+      prop.flags |= RobotModel::VariableProperties::CONTINUOUS;
+      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
+      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
+
+      properties.emplace_back(prop);
+    }
+    else
+    {
+      names.emplace_back("real" + std::to_string(i));
+
+      RobotModel::VariableProperties prop;
+      prop.min_position = mPositionLowerLimits(i);
+      prop.max_position = mPositionUpperLimits(i);
+      prop.flags |= RobotModel::VariableProperties::BOUNDED;
+      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
+      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
+
+      properties.emplace_back(prop);
+    }
+  }
+
+  model.setPlanningJoints(names);
+  model.variables = std::move(properties);
+
+  if (model.si->getStateSpace()->hasProjection("fk"))
+  {
+    auto proj = model.si->getStateSpace()->getProjection("fk");
+    model.projection = proj.get();
+  }
+}
+
 void SetStateVisualizer(
     PlannerImpl* planner, const OMPLPlanner::VisualizerFun& fun)
 {
@@ -1146,6 +1107,16 @@ void OMPLPlanner::setup()
 void OMPLPlanner::getPlannerData(ompl::base::PlannerData& data) const
 {
   return m_impl->getPlannerData(this, data);
+}
+
+void OMPLPlanner::makeVariableProperties()
+{
+  return m_impl->makeVariableProperties();
+}
+
+void OMPLPlanner::setPositionLimits(Eigen::VectorXd positionLowerLimits, Eigen::VectorXd positionUpperLimits)
+{
+  return m_impl->setPositionLimits(positionLowerLimits, positionUpperLimits);
 }
 
 auto MakeStateSMPL(
