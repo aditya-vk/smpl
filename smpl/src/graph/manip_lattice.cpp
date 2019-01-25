@@ -791,16 +791,16 @@ bool ManipLattice::setStart(const RobotState& state)
         return false;
     }
 
-    // check if the start configuration is in collision
-    if (!collisionChecker()->isStateValid(state, true)) {
-        auto* vis_name = "invalid_start";
-        SV_SHOW_WARN_NAMED(vis_name, collisionChecker()->getCollisionModelVisualization(state));
-        SMPL_WARN(" -> in collision");
-        return false;
-    }
+    // // check if the start configuration is in collision
+    // if (!collisionChecker()->isStateValid(state, true)) {
+    //     auto* vis_name = "invalid_start";
+    //     SV_SHOW_WARN_NAMED(vis_name, collisionChecker()->getCollisionModelVisualization(state));
+    //     SMPL_WARN(" -> in collision");
+    //     return false;
+    // }
 
-    auto* vis_name = "start_config";
-    SV_SHOW_INFO_NAMED(vis_name, getStateVisualization(state, vis_name));
+    // auto* vis_name = "start_config";
+    // SV_SHOW_INFO_NAMED(vis_name, getStateVisualization(state, vis_name));
 
     // get arm position in environment
     auto start_coord = RobotCoord(robot()->jointVariableCount());
