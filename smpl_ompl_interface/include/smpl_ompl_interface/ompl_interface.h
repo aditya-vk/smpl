@@ -9,6 +9,10 @@
 #include <Eigen/Dense>
 #include <ompl/base/Planner.h>
 
+// aikido includes
+#include <aikido/planner/ompl/GeometricStateSpace.hpp>
+#include <aikido/statespace/dart/MetaSkeletonStateSpace.hpp>
+
 namespace smpl {
 
 class OccupancyGrid;
@@ -38,6 +42,14 @@ struct OMPLPlanner : public ompl::base::Planner
 {
     std::unique_ptr<detail::PlannerImpl> m_impl;
 
+    aikido::statespace::dart::MetaSkeletonStateSpacePtr mSpace;
+
+    // Position Lower Limits
+    Eigen::VectorXd mPositionLowerLimits;
+
+    // Position Upper Limits
+    Eigen::VectorXd mPositionUpperLimits;
+
     /// \param planner_id
     OMPLPlanner(
         const ompl::base::SpaceInformationPtr& si,
@@ -65,12 +77,17 @@ struct OMPLPlanner : public ompl::base::Planner
 
     void getPlannerData(ompl::base::PlannerData& data) const override;
 
+    void setPositionLimits(Eigen::VectorXd positionLowerLimits, Eigen::VectorXd positionUpperLimits);
+
+    void setMetaSkeletonStateSpace(aikido::statespace::dart::MetaSkeletonStateSpacePtr sspace);
+
     friend struct detail::PlannerImpl;
 };
 
 auto MakeStateSMPL(
     const ompl::base::StateSpace* space,
-    const ompl::base::State* state)
+    const ompl::base::State* state,
+    aikido::statespace::dart::MetaSkeletonStateSpacePtr& metaskeletonStatespace)
     -> std::vector<double>;
 
 auto MakeStateOMPL(
