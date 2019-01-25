@@ -791,6 +791,8 @@ bool ManipLattice::setStart(const RobotState& state)
         return false;
     }
 
+// AVK: Disabling collision checker for now
+
     // // check if the start configuration is in collision
     // if (!collisionChecker()->isStateValid(state, true)) {
     //     auto* vis_name = "invalid_start";
@@ -798,6 +800,8 @@ bool ManipLattice::setStart(const RobotState& state)
     //     SMPL_WARN(" -> in collision");
     //     return false;
     // }
+
+// AVK: Disabling collision checker for now
 
     // auto* vis_name = "start_config";
     // SV_SHOW_INFO_NAMED(vis_name, getStateVisualization(state, vis_name));
