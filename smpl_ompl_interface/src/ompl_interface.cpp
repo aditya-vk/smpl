@@ -30,6 +30,10 @@
 #include <smpl/search/arastar.h>
 #include <smpl/stl/memory.h>
 
+using aikido::statespace::dart::MetaSkeletonStateSpace;
+using aikido::statespace::dart::MetaSkeletonStateSpacePtr;
+using aikido::planner::ompl::GeometricStateSpace;
+
 namespace smpl {
 namespace detail {
 
@@ -252,6 +256,9 @@ enum struct ConcreteSpaceType
 
 struct PlannerImpl
 {
+    // Dimension of the statespace
+    std::size_t mDimension;
+
     // world model interface
     RobotModel model;
     CollisionChecker checker;
@@ -289,6 +296,13 @@ struct PlannerImpl
     void setup(OMPLPlanner* planner);
 
     void getPlannerData(const OMPLPlanner* planner, ompl::base::PlannerData& data) const;
+
+    /// Supports only R1 and SO2 joint robots.
+    void makeVariableProperties(const OMPLPlanner* planner);
+
+    void setupRobotModel(OMPLPlanner* planner);
+    void setupManipLattice(OMPLPlanner* planner);
+    void setupParams(OMPLPlanner* planner);
 };
 
 static
@@ -428,38 +442,6 @@ PlannerImpl::PlannerImpl(
     // Initialize RobotModel //
     ///////////////////////////
 
-    this->model.si = si;
-    
-    std::vector<std::string> names;
-    std::vector<RobotModel::VariableProperties> props;
-
-    for (std::size_t i = 0; i < si->getStateSpace()->getDimension(); ++i)
-    {
-      std::string name = "real" + std::to_string(i);
-      names.emplace_back(name);
-
-      RobotModel::VariableProperties prop;
-      prop.min_position = -5.0;
-      prop.max_position = 5.0;
-      prop.flags |= RobotModel::VariableProperties::BOUNDED;
-      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
-      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
-
-      props.push_back(prop);
-    }
-
-    model.setPlanningJoints(names);
-    model.variables = std::move(props);
-
-    if (si->getStateSpace()->hasProjection("fk")) 
-    {
-      auto proj = si->getStateSpace()->getProjection("fk");
-      model.projection = proj.get();
-
-      if (model.projection == NULL)
-        throw std::invalid_argument("Cannot run without FK evaluator.");
-    }
-
     ////////////////////////////////////////////
     // Initialize Collision Checker Interface //
     ////////////////////////////////////////////
@@ -471,56 +453,6 @@ PlannerImpl::PlannerImpl(
     //////////////////////////////
     // Initialize Manip Lattice //
     //////////////////////////////
-
-    auto res = 0.05;
-
-    std::vector<double> resolutions;
-    resolutions.resize(this->model.getPlanningJoints().size(), res);
-    if (!this->space.init(
-            &this->model,
-            &this->checker,
-            resolutions,
-            &this->actions))
-    {
-        SMPL_WARN("Failed to initialize manip lattice");
-        return;
-    }
-
-    if (grid != NULL) {
-        this->space.setVisualizationFrameId(grid->getReferenceFrame());
-    }
-
-    if (!this->actions.init(&this->space)) {
-        SMPL_WARN("Failed to initialize Manip Lattice Action Space");
-        return;
-    }
-
-    for (int i = 0; i < (int)this->model.getPlanningJoints().size(); ++i) {
-        std::vector<double> mprim(this->model.getPlanningJoints().size(), 0.0);
-        mprim[i] = res;
-        this->actions.addMotionPrim(mprim, false);
-    }
-
-#if 0
-    SMPL_DEBUG("Action Set:");
-    for (auto ait = this->actions.begin(); ait != this->actions.end(); ++ait) {
-        SMPL_DEBUG("  type: %s", to_cstring(ait->type));
-        if (ait->type == smpl::MotionPrimitive::SNAP_TO_RPY) {
-            SMPL_DEBUG("    enabled: %s", this->actions.useAmp(smpl::MotionPrimitive::SNAP_TO_RPY) ? "true" : "false");
-            SMPL_DEBUG("    thresh: %0.3f", this->actions.ampThresh(smpl::MotionPrimitive::SNAP_TO_RPY));
-        } else if (ait->type == smpl::MotionPrimitive::SNAP_TO_XYZ) {
-            SMPL_DEBUG("    enabled: %s", this->actions.useAmp(smpl::MotionPrimitive::SNAP_TO_XYZ) ? "true" : "false");
-            SMPL_DEBUG("    thresh: %0.3f", this->actions.ampThresh(smpl::MotionPrimitive::SNAP_TO_XYZ));
-        } else if (ait->type == smpl::MotionPrimitive::SNAP_TO_XYZ_RPY) {
-            SMPL_DEBUG("    enabled: %s", this->actions.useAmp(smpl::MotionPrimitive::SNAP_TO_XYZ_RPY) ? "true" : "false");
-            SMPL_DEBUG("    thresh: %0.3f", this->actions.ampThresh(smpl::MotionPrimitive::SNAP_TO_XYZ_RPY));
-        } else if (ait->type == smpl::MotionPrimitive::LONG_DISTANCE ||
-            ait->type == smpl::MotionPrimitive::SHORT_DISTANCE)
-        {
-            SMPL_DEBUG_STREAM("    action: " << ait->action);
-        }
-    }
-#endif
 
     //////////////////////////
     // Initialize Heuristic //
@@ -557,8 +489,307 @@ PlannerImpl::PlannerImpl(
     // Declare Parameters //
     ////////////////////////
 
-    // declare state space discretization parameters...
-    for (auto i = 0; i < this->model.getPlanningJoints().size(); ++i) {
+    this->initialized = true;
+}
+
+bool IsAnyGoal(void* user, const smpl::RobotState& state)
+{
+    auto* planner = static_cast<OMPLPlanner*>(user);
+    auto* space = planner->getSpaceInformation()->getStateSpace().get();
+    return planner->getProblemDefinition()->getGoal()->isSatisfied(
+            MakeStateOMPL(space, state));
+}
+
+auto to_cstring(ompl::base::GoalType type) -> const char*
+{
+    switch (type) {
+    case ompl::base::GoalType::GOAL_ANY:
+        return "GOAL_ANY";
+    case ompl::base::GoalType::GOAL_LAZY_SAMPLES:
+        return "GOAL_LAZY_SAMPLES";
+    case ompl::base::GoalType::GOAL_STATE:
+        return "GOAL_STATE";
+    case ompl::base::GoalType::GOAL_REGION:
+        return "GOAL_REGION";
+    case ompl::base::GoalType::GOAL_STATES:
+        return "GOAL_STATES";
+    case ompl::base::GoalType::GOAL_SAMPLEABLE_REGION:
+        return "GOAL_SAMPLEABLE_REGION";
+    default:
+        return "<UNRECOGNIZED>";
+    }
+}
+
+auto PlannerImpl::solve(
+    OMPLPlanner* planner,
+    const ompl::base::PlannerTerminationCondition& ptc)
+    -> ompl::base::PlannerStatus
+{
+    SMPL_DEBUG("Planner::solve");
+
+    auto* si = planner->getSpaceInformation().get();
+    auto* ompl_space = si->getStateSpace().get();
+    auto* pdef = planner->getProblemDefinition().get();
+
+    if (pdef->getSpaceInformation().get() != si) 
+    {
+        SMPL_ERROR("wtf");
+    }
+
+    /////////////////////////
+    // Set the start state //
+    /////////////////////////
+
+    {
+        if (pdef->getStartStateCount() > 1) 
+        {
+            SMPL_WARN("Received multiple start states. Why?");
+            return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_START);
+        }
+
+        auto* start = pdef->getStartState(0);
+        smpl::RobotState start_state = MakeStateSMPL(ompl_space, start, planner->mSpace);
+
+        SMPL_DEBUG_STREAM("start state = " << start_state);
+        if (!this->space.setStart(start_state)) 
+        {
+            SMPL_WARN("Failed to set start state");
+            return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_START);
+        }
+
+        this->heuristic->updateStart(start_state);
+    }
+
+    ////////////////////////
+    // Set the goal state //
+    ////////////////////////
+
+    {
+        smpl::GoalConstraint goal_condition;
+
+        // Inheritance hierarchy for goal types:
+        // GoalAny
+        //      GoalRegion
+        //          GoalSampleableRegion
+        //              GoalState
+        //              GoalStates
+        //                  GoalLazySamples
+
+        auto& abstract_goal = pdef->getGoal();
+        SMPL_DEBUG("Received goal of type %s", to_cstring(abstract_goal->getType()));
+
+        switch (abstract_goal->getType()) {
+        case ompl::base::GoalType::GOAL_ANY:
+        {
+            auto* pose_goal = dynamic_cast<PoseGoal*>(abstract_goal.get());
+            if (pose_goal != NULL) {
+                SMPL_INFO("Got ourselves a pose goal!");
+                goal_condition.type = smpl::GoalType::XYZ_RPY_GOAL;
+                goal_condition.pose = pose_goal->pose;
+                goal_condition.xyz_tolerance[0] = pose_goal->position_tolerance[0];
+                goal_condition.xyz_tolerance[1] = pose_goal->position_tolerance[1];
+                goal_condition.xyz_tolerance[2] = pose_goal->position_tolerance[2];
+                goal_condition.rpy_tolerance[0] = pose_goal->orientation_tolerance[0];
+                goal_condition.rpy_tolerance[1] = pose_goal->orientation_tolerance[1];
+                goal_condition.rpy_tolerance[2] = pose_goal->orientation_tolerance[2];
+                break;
+            }
+        }
+        case ompl::base::GoalType::GOAL_REGION:
+        case ompl::base::GoalType::GOAL_SAMPLEABLE_REGION:
+        case ompl::base::GoalType::GOAL_STATES:
+        case ompl::base::GoalType::GOAL_LAZY_SAMPLES:
+        {
+            auto* goal = static_cast<ompl::base::Goal*>(abstract_goal.get());
+            goal_condition.type = smpl::GoalType::USER_GOAL_CONSTRAINT_FN;
+            goal_condition.check_goal = IsAnyGoal;
+            goal_condition.check_goal_user = planner;
+            break;
+        }
+        case ompl::base::GoalType::GOAL_STATE:
+        {
+            auto* goal = static_cast<ompl::base::GoalState*>(abstract_goal.get());
+            auto goal_state = MakeStateSMPL(ompl_space, goal->getState(), planner->mSpace);
+            SMPL_DEBUG_STREAM("goal state = " << goal_state);
+            goal_condition.type = smpl::GoalType::JOINT_STATE_GOAL;
+            goal_condition.angles = goal_state;
+            // UGH
+            goal_condition.angle_tolerances.resize(
+                    goal_condition.angles.size(),
+                    0.5 * this->space.resolutions().front());
+            break;
+        }
+        default:
+            SMPL_WARN("Unrecognized OMPL goal type");
+            break;
+        }
+
+        if (!space.setGoal(goal_condition)) {
+            SMPL_WARN("Failed to set goal");
+            return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_GOAL);
+        }
+
+        this->heuristic->updateGoal(goal_condition);
+    }
+
+    auto* bfs_heuristic = dynamic_cast<BfsHeuristic*>(this->heuristic.get());
+    if (bfs_heuristic != NULL) {
+        SV_SHOW_DEBUG_NAMED("bfs_walls", bfs_heuristic->getWallsVisualization());
+        SV_SHOW_DEBUG_NAMED("bfs_values", bfs_heuristic->getValuesVisualization());
+    }
+
+    //////////////////
+    // Do the thing //
+    //////////////////
+
+    // TODO: hmmm, is this needed? this should probably be part of clear()
+    // and allow the state of the search to persist between calls
+    this->search->force_planning_from_scratch();
+
+    smpl::ARAStar::TimeParameters time_params;
+    time_params.bounded = this->search->boundExpansions();
+    time_params.improve = this->search->improveSolution();
+    time_params.type = smpl::ARAStar::TimeParameters::USER;
+    time_params.timed_out_fun = [&]() { return ptc.eval(); };
+
+    auto start_id = space.getStartStateID();
+    auto goal_id = space.getGoalStateID();
+    this->search->set_start(start_id);
+    this->search->set_goal(goal_id);
+
+    std::vector<int> solution;
+    int cost;
+    auto res = this->search->replan(time_params, &solution, &cost);
+
+    if (!res) {
+        SMPL_WARN("Failed to find solution");
+        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::TIMEOUT);
+    }
+
+    SMPL_DEBUG("Expands: %d", this->search->get_n_expands());
+    SMPL_DEBUG("Expands (Init): %d", this->search->get_n_expands_init_solution());
+    SMPL_DEBUG("Epsilon: %f", this->search->get_final_epsilon());
+    SMPL_DEBUG("Epsilon (Init): %f", this->search->get_initial_eps());
+
+#if 0
+    // TODO: hidden ARA*-specific return codes
+    switch (res) {
+    case 0: // SUCCESS
+        SMPL_DEBUG("Planner found optimal solution");
+        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::EXACT_SOLUTION);
+        break;
+    case 4: // TIMED_OUT
+        SMPL_DEBUG("Planner timed out");
+        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::TIMEOUT);
+        break;
+    case 5: // EXHAUSTED_OPEN_LIST
+        SMPL_DEBUG("Planner returned with an exact solution");
+        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::EXACT_SOLUTION);
+        break;
+    }
+#endif
+
+    //////////////////////////////////////////////////////////
+    // Convert discrete state path to continuous state path //
+    //////////////////////////////////////////////////////////
+
+    std::vector<smpl::RobotState> path;
+    if (!space.extractPath(solution, path)) {
+        return ompl::base::PlannerStatus::CRASH;
+    }
+
+    auto* p_path = new ompl::geometric::PathGeometric(planner->getSpaceInformation());
+
+    for (auto& p : path) {
+        auto* ompl_state = MakeStateOMPL(ompl_space, p);
+        p_path->append(ompl_state);
+    }
+
+    auto ompl_path = ompl::base::PathPtr(p_path);
+    planner->getProblemDefinition()->addSolutionPath(ompl_path);
+    return ompl::base::PlannerStatus(ompl::base::PlannerStatus::EXACT_SOLUTION);
+}
+
+void PlannerImpl::setProblemDefinition(
+    OMPLPlanner* planner,
+    const ompl::base::ProblemDefinitionPtr& pdef)
+{
+    SMPL_DEBUG("Planner::setProblemDefinition");
+    planner->ompl::base::Planner::setProblemDefinition(pdef);
+}
+
+void PlannerImpl::clear(OMPLPlanner* planner)
+{
+    SMPL_DEBUG("TODO: Planner::clear");
+    planner->ompl::base::Planner::clear();
+
+    // NOTE: can set this->setup_ to false to communicate that setup should
+    // be called again
+}
+
+void PlannerImpl::setup(OMPLPlanner* planner)
+{
+    SMPL_DEBUG("Planner::setup");
+    planner->ompl::base::Planner::setup();
+    
+    setupRobotModel(planner);
+    SMPL_INFO("Successfully setup robot model!");
+
+    setupManipLattice(planner);
+    SMPL_INFO("Successfully setup manipulation lattice!");
+
+    setupParams(planner);
+    SMPL_INFO("Successfully setup planning params!");
+}
+
+void PlannerImpl::setupRobotModel(OMPLPlanner* planner)
+{
+
+    this->model.si = planner->getSpaceInformation().get();
+    
+    makeVariableProperties(planner);
+}
+
+void PlannerImpl::setupManipLattice(OMPLPlanner* planner)
+{
+    auto res = 0.05;
+
+    std::vector<double> resolutions;
+    resolutions.resize(this->model.getPlanningJoints().size(), res);
+    if (!this->space.init(
+            &this->model,
+            &this->checker,
+            resolutions,
+            &this->actions))
+    {
+        SMPL_WARN("Failed to initialize manip lattice");
+        return;
+    }
+
+    if (this->grid != NULL) {
+        this->space.setVisualizationFrameId(grid->getReferenceFrame());
+    }
+
+    if (!this->actions.init(&this->space)) {
+        SMPL_WARN("Failed to initialize Manip Lattice Action Space");
+        return;
+    }
+
+    for (int i = 0; i < (int)this->model.getPlanningJoints().size(); ++i) {
+        std::vector<double> mprim(this->model.getPlanningJoints().size(), 0.0);
+        mprim[i] = res;
+        this->actions.addMotionPrim(mprim, false);
+    }
+}
+
+
+
+void PlannerImpl::setupParams(OMPLPlanner* planner)
+{
+
+   // declare state space discretization parameters...
+    for (auto i = 0; i < this->model.getPlanningJoints().size(); ++i) 
+    {
         auto& vname = this->model.getPlanningJoints()[i];
         auto set = [this](double discretization) { /* TODO */ };
         auto get = [this, i]() { return this->space.resolutions()[i]; };
@@ -704,245 +935,6 @@ PlannerImpl::PlannerImpl(
         auto get = [&]() { return this->search->allowedRepairTime(); };
         planner->params().declareParam<double>("repair_time", set, get);
     }
-
-    this->initialized = true;
-}
-
-bool IsAnyGoal(void* user, const smpl::RobotState& state)
-{
-    auto* planner = static_cast<OMPLPlanner*>(user);
-    auto* space = planner->getSpaceInformation()->getStateSpace().get();
-    return planner->getProblemDefinition()->getGoal()->isSatisfied(
-            MakeStateOMPL(space, state));
-}
-
-auto to_cstring(ompl::base::GoalType type) -> const char*
-{
-    switch (type) {
-    case ompl::base::GoalType::GOAL_ANY:
-        return "GOAL_ANY";
-    case ompl::base::GoalType::GOAL_LAZY_SAMPLES:
-        return "GOAL_LAZY_SAMPLES";
-    case ompl::base::GoalType::GOAL_STATE:
-        return "GOAL_STATE";
-    case ompl::base::GoalType::GOAL_REGION:
-        return "GOAL_REGION";
-    case ompl::base::GoalType::GOAL_STATES:
-        return "GOAL_STATES";
-    case ompl::base::GoalType::GOAL_SAMPLEABLE_REGION:
-        return "GOAL_SAMPLEABLE_REGION";
-    default:
-        return "<UNRECOGNIZED>";
-    }
-}
-
-auto PlannerImpl::solve(
-    OMPLPlanner* planner,
-    const ompl::base::PlannerTerminationCondition& ptc)
-    -> ompl::base::PlannerStatus
-{
-    SMPL_DEBUG("Planner::solve");
-
-    auto* si = planner->getSpaceInformation().get();
-    auto* ompl_space = si->getStateSpace().get();
-    auto* pdef = planner->getProblemDefinition().get();
-
-    if (pdef->getSpaceInformation().get() != si) {
-        SMPL_ERROR("wtf");
-    }
-
-    /////////////////////////
-    // Set the start state //
-    /////////////////////////
-
-    {
-        if (pdef->getStartStateCount() > 1) {
-            SMPL_WARN("Received multiple start states. Why?");
-            return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_START);
-        }
-
-        auto* start = pdef->getStartState(0);
-        auto start_state = MakeStateSMPL(ompl_space, start);
-        SMPL_DEBUG_STREAM("start state = " << start_state);
-        if (!this->space.setStart(start_state)) {
-            SMPL_WARN("Failed to set start state");
-            return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_START);
-        }
-
-        this->heuristic->updateStart(start_state);
-    }
-
-    ////////////////////////
-    // Set the goal state //
-    ////////////////////////
-
-    {
-        smpl::GoalConstraint goal_condition;
-
-        // Inheritance hierarchy for goal types:
-        // GoalAny
-        //      GoalRegion
-        //          GoalSampleableRegion
-        //              GoalState
-        //              GoalStates
-        //                  GoalLazySamples
-
-        auto& abstract_goal = pdef->getGoal();
-        SMPL_DEBUG("Received goal of type %s", to_cstring(abstract_goal->getType()));
-
-        switch (abstract_goal->getType()) {
-        case ompl::base::GoalType::GOAL_ANY:
-        {
-            auto* pose_goal = dynamic_cast<PoseGoal*>(abstract_goal.get());
-            if (pose_goal != NULL) {
-                SMPL_INFO("Got ourselves a pose goal!");
-                goal_condition.type = smpl::GoalType::XYZ_RPY_GOAL;
-                goal_condition.pose = pose_goal->pose;
-                goal_condition.xyz_tolerance[0] = pose_goal->position_tolerance[0];
-                goal_condition.xyz_tolerance[1] = pose_goal->position_tolerance[1];
-                goal_condition.xyz_tolerance[2] = pose_goal->position_tolerance[2];
-                goal_condition.rpy_tolerance[0] = pose_goal->orientation_tolerance[0];
-                goal_condition.rpy_tolerance[1] = pose_goal->orientation_tolerance[1];
-                goal_condition.rpy_tolerance[2] = pose_goal->orientation_tolerance[2];
-                break;
-            }
-        }
-        case ompl::base::GoalType::GOAL_REGION:
-        case ompl::base::GoalType::GOAL_SAMPLEABLE_REGION:
-        case ompl::base::GoalType::GOAL_STATES:
-        case ompl::base::GoalType::GOAL_LAZY_SAMPLES:
-        {
-            auto* goal = static_cast<ompl::base::Goal*>(abstract_goal.get());
-            goal_condition.type = smpl::GoalType::USER_GOAL_CONSTRAINT_FN;
-            goal_condition.check_goal = IsAnyGoal;
-            goal_condition.check_goal_user = planner;
-            break;
-        }
-        case ompl::base::GoalType::GOAL_STATE:
-        {
-            auto* goal = static_cast<ompl::base::GoalState*>(abstract_goal.get());
-            auto goal_state = MakeStateSMPL(ompl_space, goal->getState());
-            SMPL_DEBUG_STREAM("goal state = " << goal_state);
-            goal_condition.type = smpl::GoalType::JOINT_STATE_GOAL;
-            goal_condition.angles = goal_state;
-            // UGH
-            goal_condition.angle_tolerances.resize(
-                    goal_condition.angles.size(),
-                    0.5 * this->space.resolutions().front());
-            break;
-        }
-        default:
-            SMPL_WARN("Unrecognized OMPL goal type");
-            break;
-        }
-
-        if (!space.setGoal(goal_condition)) {
-            SMPL_WARN("Failed to set goal");
-            return ompl::base::PlannerStatus(ompl::base::PlannerStatus::INVALID_GOAL);
-        }
-
-        this->heuristic->updateGoal(goal_condition);
-    }
-
-    auto* bfs_heuristic = dynamic_cast<BfsHeuristic*>(this->heuristic.get());
-    if (bfs_heuristic != NULL) {
-        SV_SHOW_DEBUG_NAMED("bfs_walls", bfs_heuristic->getWallsVisualization());
-        SV_SHOW_DEBUG_NAMED("bfs_values", bfs_heuristic->getValuesVisualization());
-    }
-
-    //////////////////
-    // Do the thing //
-    //////////////////
-
-    // TODO: hmmm, is this needed? this should probably be part of clear()
-    // and allow the state of the search to persist between calls
-    this->search->force_planning_from_scratch();
-
-    smpl::ARAStar::TimeParameters time_params;
-    time_params.bounded = this->search->boundExpansions();
-    time_params.improve = this->search->improveSolution();
-    time_params.type = smpl::ARAStar::TimeParameters::USER;
-    time_params.timed_out_fun = [&]() { return ptc.eval(); };
-
-    auto start_id = space.getStartStateID();
-    auto goal_id = space.getGoalStateID();
-    this->search->set_start(start_id);
-    this->search->set_goal(goal_id);
-
-    std::vector<int> solution;
-    int cost;
-    auto res = this->search->replan(time_params, &solution, &cost);
-
-    if (!res) {
-        SMPL_WARN("Failed to find solution");
-        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::TIMEOUT);
-    }
-
-    SMPL_DEBUG("Expands: %d", this->search->get_n_expands());
-    SMPL_DEBUG("Expands (Init): %d", this->search->get_n_expands_init_solution());
-    SMPL_DEBUG("Epsilon: %f", this->search->get_final_epsilon());
-    SMPL_DEBUG("Epsilon (Init): %f", this->search->get_initial_eps());
-
-#if 0
-    // TODO: hidden ARA*-specific return codes
-    switch (res) {
-    case 0: // SUCCESS
-        SMPL_DEBUG("Planner found optimal solution");
-        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::EXACT_SOLUTION);
-        break;
-    case 4: // TIMED_OUT
-        SMPL_DEBUG("Planner timed out");
-        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::TIMEOUT);
-        break;
-    case 5: // EXHAUSTED_OPEN_LIST
-        SMPL_DEBUG("Planner returned with an exact solution");
-        return ompl::base::PlannerStatus(ompl::base::PlannerStatus::EXACT_SOLUTION);
-        break;
-    }
-#endif
-
-    //////////////////////////////////////////////////////////
-    // Convert discrete state path to continuous state path //
-    //////////////////////////////////////////////////////////
-
-    std::vector<smpl::RobotState> path;
-    if (!space.extractPath(solution, path)) {
-        return ompl::base::PlannerStatus::CRASH;
-    }
-
-    auto* p_path = new ompl::geometric::PathGeometric(planner->getSpaceInformation());
-
-    for (auto& p : path) {
-        auto* ompl_state = MakeStateOMPL(ompl_space, p);
-        p_path->append(ompl_state);
-    }
-
-    auto ompl_path = ompl::base::PathPtr(p_path);
-    planner->getProblemDefinition()->addSolutionPath(ompl_path);
-    return ompl::base::PlannerStatus(ompl::base::PlannerStatus::EXACT_SOLUTION);
-}
-
-void PlannerImpl::setProblemDefinition(
-    OMPLPlanner* planner,
-    const ompl::base::ProblemDefinitionPtr& pdef)
-{
-    SMPL_DEBUG("Planner::setProblemDefinition");
-    planner->ompl::base::Planner::setProblemDefinition(pdef);
-}
-
-void PlannerImpl::clear(OMPLPlanner* planner)
-{
-    SMPL_DEBUG("TODO: Planner::clear");
-    planner->ompl::base::Planner::clear();
-
-    // NOTE: can set this->setup_ to false to communicate that setup should
-    // be called again
-}
-
-void PlannerImpl::setup(OMPLPlanner* planner)
-{
-    SMPL_DEBUG("Planner::setup");
-    planner->ompl::base::Planner::setup();
 }
 
 void PlannerImpl::checkValidity(OMPLPlanner* planner)
@@ -957,6 +949,53 @@ void PlannerImpl::getPlannerData(
 {
     SMPL_DEBUG("TODO: Planner::getPlannerData");
     planner->ompl::base::Planner::getPlannerData(data);
+}
+
+
+void PlannerImpl::makeVariableProperties(const OMPLPlanner* planner)
+{
+  std::vector<std::string> names;
+  std::vector<RobotModel::VariableProperties> properties;
+
+  for (int i = 0; i < (planner->mPositionUpperLimits).size(); ++i)
+  {
+    if (planner->mPositionLowerLimits(i) == std::numeric_limits<double>::min()
+      || planner->mPositionUpperLimits(i) == std::numeric_limits<double>::max())
+    {
+      names.emplace_back("so2" + std::to_string(i));
+
+      RobotModel::VariableProperties prop;
+      prop.min_position = planner->mPositionLowerLimits(i);
+      prop.max_position = planner->mPositionUpperLimits(i);
+      prop.flags |= RobotModel::VariableProperties::CONTINUOUS;
+      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
+      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
+
+      properties.emplace_back(prop);
+    }
+    else
+    {
+      names.emplace_back("real" + std::to_string(i));
+
+      RobotModel::VariableProperties prop;
+      prop.min_position = planner->mPositionLowerLimits(i);
+      prop.max_position = planner->mPositionUpperLimits(i);
+      prop.flags |= RobotModel::VariableProperties::BOUNDED;
+      prop.max_velocity = std::numeric_limits<double>::quiet_NaN();
+      prop.max_acceleration = std::numeric_limits<double>::quiet_NaN();
+
+      properties.emplace_back(prop);
+    }
+  }
+
+  this->model.setPlanningJoints(names);
+  this->model.variables = std::move(properties);
+
+  if (this->model.si->getStateSpace()->hasProjection("fk"))
+  {
+    auto proj = this->model.si->getStateSpace()->getProjection("fk");
+    this->model.projection = proj.get();
+  }
 }
 
 void SetStateVisualizer(PlannerImpl* planner, const OMPLPlanner::VisualizerFun& fun)
@@ -1047,14 +1086,58 @@ void OMPLPlanner::getPlannerData(ompl::base::PlannerData& data) const
     return m_impl->getPlannerData(this, data);
 }
 
+void OMPLPlanner::setPositionLimits(Eigen::VectorXd positionLowerLimits,
+  Eigen::VectorXd positionUpperLimits)
+{
+  // Check if both limits have the same dimension.
+  if (positionUpperLimits.size() != positionLowerLimits.size())
+  {
+    throw std::invalid_argument("[ompl_interface] state dimension should match limits");
+  }
+
+  // Check if the dimensions match with statespace.
+  if (positionUpperLimits.size() != mSpace->getDimension())
+  {
+    throw std::invalid_argument("[ompl_interface] state dimension should match limits");
+  }
+
+  for (int i = 0; i < positionLowerLimits.size(); ++i)
+
+  mPositionLowerLimits = positionLowerLimits;
+  mPositionUpperLimits = positionUpperLimits;
+}
+
+void OMPLPlanner::setMetaSkeletonStateSpace(aikido::statespace::dart::MetaSkeletonStateSpacePtr sspace)
+{
+    mSpace = std::move(sspace);
+}
+
 auto MakeStateSMPL(
     const ompl::base::StateSpace* space,
-    const ompl::base::State* state)
+    const ompl::base::State* state,
+    aikido::statespace::dart::MetaSkeletonStateSpacePtr& sspace)
     -> smpl::RobotState
 {
-    smpl::RobotState s;
-    space->copyToReals(s, state);
-    return s;
+  if (!sspace)
+  {
+    throw std::invalid_argument("space cannot be null!");
+  }
+ 
+  const auto* st = static_cast<const GeometricStateSpace::StateType*>(state);
+ 
+  auto sstate = sspace->createState();
+ 
+  sspace->copyState(st->mState, sstate);
+  Eigen::VectorXd positions(sspace->getDimension());
+  sspace->convertStateToPositions(sstate, positions);
+
+  smpl::RobotState s;
+  s.resize(positions.size());
+  for (int i = 0; i < positions.size(); ++i)
+  {
+    s[i] = positions(i);
+  }
+  return s;
 };
 
 auto MakeStateOMPL(
